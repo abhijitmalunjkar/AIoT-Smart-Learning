@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AIoT Admin Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Poppins', sans-serif; background-color: #eef2f5; padding: 20px; color: #2c3e50; margin: 0; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); }
+        h1 { color: #1abc9c; border-bottom: 2px solid #ecf0f1; padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center;}
+        h2 { color: #34495e; margin-top: 30px; font-size: 1.2rem; }
+        
+        .registration-card { background: #f8fafc; padding: 20px; border-radius: 10px; border-left: 5px solid #3498db; margin-bottom: 30px; }
+        input, select, button { padding: 12px 15px; font-size: 15px; margin-right: 10px; border-radius: 6px; border: 1px solid #cbd5e1; font-family: 'Poppins'; }
+        button { background-color: #3498db; color: white; border: none; cursor: pointer; font-weight: 600; }
+        button:hover { background-color: #2980b9; }
+        .btn-export { background-color: #27ae60; text-decoration: none; padding: 10px 20px; color: white; border-radius: 6px; font-size: 14px; font-weight: bold;}
+        .btn-export:hover { background-color: #219150; }
+
+        .chart-container { width: 100%; height: 320px; margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 8px; background: white;}
+
+        table { width: 100%; border-collapse: separate; border-spacing: 0; margin-top: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.02); }
+        th, td { padding: 12px; text-align: center; border-bottom: 1px solid #ecf0f1; font-size: 14px;}
+        th { background-color: #2c3e50; color: white; }
+        .badge { padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; }
+        .badge-success { background-color: #d4edda; color: #155724; }
+        .badge-error { background-color: #f8d7da; color: #721c24; }
+        .badge-warning { background-color: #fff3cd; color: #856404; }
+        .timestamp-field { color: #7f8c8d; font-size: 12px; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👩‍🏫 AIoT Teacher Dashboard 
+            <a href="/export" class="btn-export">📥 Download CSV Report</a>
+        </h1>
+        
+        <div class="registration-card">
+            <h2>📊 Student Progress Curve</h2>
+            <select id="student-chart-selector" onchange="loadGraph()">
+                <option value="">-- Choose student profile to render progress graph --</option>
+                {% for s in students %}
+                    <option value="{{ s[0] }}">{{ s[1] }}</option>
+                {% endfor %}
+            </select>
+            <div class="chart-container" id="graph-wrapper">
+                <canvas id="progressChart"></canvas>
+            </div>
+        </div>
+
+        <div class="registration-card">
+            <h2>➕ Register New Student Profile</h2>
+            <form method="POST" action="/admin">
+                <input type="text" name="student_name" placeholder="Enter student's first name..." required autocomplete="off">
+                <button type="submit">Enroll Student</button>
+            </form>
+        </div>
+
+        <h2>📈 Live Telemetry & Historical Performance Logs</h2>
+        <table>
+            <tr>
+                <th>Student Profile</th>
+                <th>Subject Track</th>
+                <th>Difficulty Complexity</th>
+                <th>Response Latency</th>
+                <th>Initial Hesitation</th>
+                <th>Fidget Volatility</th>
+                <th>Task Result</th>
+                <th>📅 Real Timestamp</th>
+            </tr>
+            {% for log in logs %}
+            <tr>
+                <td><b>{{ log[0] }}</b></td>
+                <td style="text-transform: capitalize;">{{ log[1] }}</td>
+                <td><span style="color:#3498db; font-weight:bold;">C-{{ log[7] }}</span></td>
+                <td>{{ "%.1f"|format(log[2]) }}s</td>
+                <td>
+                    {% if log[3] > 8.0 %}<span class="badge badge-warning">{{ "%.1f"|format(log[3]) }}s ⚠️</span>
+                    {% else %}{{ "%.1f"|format(log[3]) }}s{% endif %}
+                </td>
+                <td>
+                    {% if log[4] > 5 %}<span class="badge badge-warning">{{ log[4] }} 🔥</span>
+                    {% else %}{{ log[4] }}{% endif %}
+                </td>
+                <td>
+                    {% if log[5] %}<span class="badge badge-success">Correct</span>
+                    {% else %}<span class="badge badge-error">Incorrect</span>{% endif %}
+                </td>
+                <td class="timestamp-field">{{ log[6] }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <script>
+        let myChart = null;
+
+        async function loadGraph() {
+            const studentId = document.getElementById('student-chart-selector').value;
+            if (!studentId) return;
+
+            try {
+                const response = await fetch(`/api/progress/${studentId}`);
+                const data = await response.json();
+
+                // FIX: Physically reset the canvas HTML to guarantee Chart.js doesn't crash on redraw
+                document.getElementById('graph-wrapper').innerHTML = '<canvas id="progressChart"></canvas>';
+                const ctx = document.getElementById('progressChart').getContext('2d');
+
+                if (!data || data.length === 0) {
+                    alert("This student profile has no active session logs yet.");
+                    return;
+                }
+
+                const labels = data.map(d => `Q${d.attempt}`);
+                const complexityData = data.map(d => d.complexity);
+                const pointColors = data.map(d => d.is_correct ? '#27ae60' : '#e74c3c');
+
+                myChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Adaptive Edge Complexity Metric',
+                            data: complexityData,
+                            borderColor: '#3498db',
+                            backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                            pointBackgroundColor: pointColors,
+                            pointRadius: 6,
+                            fill: true,
+                            tension: 0.3
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: { y: { beginAtZero: true, max: 20 } }
+                    }
+                });
+            } catch (error) {
+                console.error("Chart Render Failure:", error);
+                alert("Could not render graph. Ensure your Python server is running.");
+            }
+        }
+    </script>
+</body>
+</html>

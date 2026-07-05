@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AIoT Edge Node - Student Interface</title>
+    <style>
+        body { font-family: 'Comic Sans MS', cursive, sans-serif; text-align: center; background-color: #f0f8ff; margin: 0; padding: 15px; touch-action: none; }
+        h1 { color: #ff4b4b; font-size: 35px; margin: 5px 0; }
+        .emojis { font-size: 35px; margin-bottom: 10px; }
+        
+        .numpad { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; max-width: 100%; margin: 0 auto; display: none; }
+        button { font-size: 24px; padding: 15px 0; border-radius: 12px; border: none; background-color: #4CAF50; color: white; cursor: pointer; }
+        button:active { background-color: #3e8e41; transform: translateY(4px); }
+        
+        #drawing-area { display: none; margin: 0 auto; }
+        canvas { border: 4px dashed #3498db; border-radius: 15px; background: white; touch-action: none; cursor: crosshair; max-width: 100%; }
+        .canvas-controls { margin-top: 10px; display: flex; gap: 10px; justify-content: center; }
+        .btn-clear { background-color: #e74c3c; width: 120px; }
+        .btn-submit-draw { background-color: #2ecc71; width: 200px; }
+
+        select { font-size: 20px; padding: 12px; width: 100%; border-radius: 10px; margin-bottom: 20px;}
+        .start-btn { background-color: #2196F3; width: 100%; font-weight: bold;}
+        .end-btn { background-color: #e74c3c; width: 100%; margin-top: 20px; font-size: 18px; padding: 12px; font-weight: bold; }
+        
+        #game-screen { display: none; } 
+        #summary-screen { display: none; margin-top: 50px; }
+        
+        #debug-panel { margin-top: 20px; padding: 10px; background: #222; color: #0f0; font-family: monospace; text-align: left; border-radius: 8px; font-size: 12px; }
+        .sim-btn { background-color: #ff9800; font-size: 14px; padding: 8px; width: 100%; margin-top: 10px;}
+    </style>
+</head>
+<body>
+
+    <div id="login-screen">
+        <h1>👋 Welcome!</h1>
+        <select id="student-selector"><option value="">Loading profiles...</option></select>
+        
+        <select id="subject-selector">
+            <option value="math">🔢 Learn Math</option>
+            <option value="alphabet">🔤 Draw Alphabets</option>
+            <option value="shapes">🟢 Draw Shapes</option>
+        </select>
+
+        <button class="start-btn" onclick="startGame()">▶️ Start Learning</button>
+    </div>
+
+    <div id="game-screen">
+        <h2 id="greeting" style="margin:0; font-size:18px; color:#555;">Level Target</h2>
+        <div class="emojis" id="emoji-display">⏳</div>
+        <h1 id="question-display">?</h1>
+
+        <div class="numpad" id="numpad"></div>
+
+        <div id="drawing-area">
+            <canvas id="draw-canvas" width="300" height="300"></canvas>
+            <div class="canvas-controls">
+                <button class="btn-clear" onclick="clearCanvas()">🗑️ Clear</button>
+                <button class="btn-submit-draw" onclick="submitDrawing()">✔️ I'm Done!</button>
+            </div>
+        </div>
+
+        <button class="end-btn" onclick="endSession()">🛑 End Session & Save</button>
+
+        <div id="debug-panel">
+            <strong>📡 Edge Sensor Telemetry</strong><br>
+            Fidgets: <span id="fidget-val">0</span> | Hesitation: <span id="hesitation-val">0.0s</span><br>
+            Stroke Data: <span id="ink-val">0</span> pixels | <span id="stroke-val">0</span> lifts<br>
+            🧠 AI: <span id="ai-insight" style="color:#ff0;">Waiting...</span>
+            <button class="sim-btn" onclick="simulateFidget()">📱 Simulate Device Shake</button>
+        </div>
+    </div>
+
+    <div id="summary-screen">
+        <h1>🎉 Great Job!</h1>
+        <p>Your session data has been securely saved to the teacher dashboard.</p>
+        <button class="start-btn" onclick="location.reload()">Back to Home</button>
+    </div>
+
+    <script>
+        window.onerror = function(msg, url, line) {
+            alert("Error: " + msg + "\nLine: " + line);
+        };
+
+        const BACKEND_URL = ''; 
+        let activeStudentId = null;
+        let activeSubject = null;
+        let currentAnswer = 0;
+        
+        let questionStartTime = 0;
+        let fidgetScore = 0;
+        let hasTouched = false;
+        let hesitationTime = 0;
+
+        let canvas = document.getElementById('draw-canvas');
+        let ctx = canvas.getContext('2d');
+        let isDrawing = false;
+        let pixelsDrawn = 0; 
+        
+        let minX = 10000, maxX = 0, minY = 10000, maxY = 0; 
+        let strokePoints = []; 
+        let strokeCount = 0; // NEW: Tracks how many times they lifted their finger
+
+        window.onload = async () => {
+            const selector = document.getElementById('student-selector');
+            try {
+                const res = await fetch(`/api/students`);
+                if (!res.ok) throw new Error(`Status: ${res.status}`);
+                const students = await res.json();
+                selector.innerHTML = '<option value="">-- Who is playing? --</option>';
+                students.forEach(s => {
+                    let opt = document.createElement('option');
+                    opt.value = s.id;
+                    opt.innerHTML = s.name;
+                    selector.appendChild(opt);
+                });
+            } catch (error) {
+                selector.innerHTML = '<option value="1">⚠️ Demo Profile (Offline Mode)</option>';
+            }
+        };
+
+        async function startGame() {
+            activeStudentId = document.getElementById('student-selector').value;
+            activeSubject = document.getElementById('subject-selector').value;
+            if(!activeStudentId) return alert("Please choose your profile first.");
+
+            document.getElementById('login-screen').style.display = 'none';
+            document.getElementById('game-screen').style.display = 'block';
+
+            try {
+                const res = await fetch(`/api/start/${activeStudentId}/${activeSubject}`);
+                const data = await res.json();
+                renderQuestion(data.question, data.level);
+            } catch (e) {
+                alert("Server Connection Error. Check your Python terminal window.");
+            }
+        }
+
+        function renderQuestion(qData, level) {
+            document.getElementById('question-display').innerText = qData.q;
+            document.getElementById('emoji-display').innerText = qData.emojis;
+            document.getElementById('greeting').innerText = `Target: ${level}`;
+            currentAnswer = qData.a;
+            
+            if(qData.type === 'numpad') {
+                document.getElementById('numpad').style.display = 'grid';
+                document.getElementById('drawing-area').style.display = 'none';
+            } else if (qData.type === 'draw') {
+                document.getElementById('numpad').style.display = 'none';
+                document.getElementById('drawing-area').style.display = 'block';
+                clearCanvas();
+            }
+
+            questionStartTime = Date.now();
+            fidgetScore = 0;
+            hasTouched = false;
+            hesitationTime = 0;
+            pixelsDrawn = 0;
+            strokeCount = 0;
+            
+            document.getElementById('fidget-val').innerText = fidgetScore;
+            document.getElementById('hesitation-val').innerText = "Tracking...";
+            document.getElementById('ink-val').innerText = "0";
+            document.getElementById('stroke-val').innerText = "0";
+        }
+
+        window.addEventListener('devicemotion', (event) => {
+            if (event.acceleration) {
+                let motion = Math.abs(event.acceleration.x || 0) + Math.abs(event.acceleration.y || 0) + Math.abs(event.acceleration.z || 0);
+                if (motion > 8.0) { 
+                    fidgetScore++;
+                    document.getElementById('fidget-val').innerText = fidgetScore;
+                }
+            }
+        });
+
+        document.body.addEventListener('touchstart', () => {
+            if (!hasTouched) {
+                hesitationTime = (Date.now() - questionStartTime) / 1000;
+                document.getElementById('hesitation-val').innerText = hesitationTime.toFixed(1) + "s";
+                hasTouched = true;
+            }
+        });
+
+        function simulateFidget() {
+            fidgetScore += 2;
+            document.getElementById('fidget-val').innerText = fidgetScore;
+        }
+
+        // --- DRAWING TRACKER ---
+        function getPointerPos(e) {
+            let rect = canvas.getBoundingClientRect();
+            let clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            let clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            return { x: clientX - rect.left, y: clientY - rect.top };
+        }
+
+        function startDrawing(e) {
+            e.preventDefault();
+            isDrawing = true;
+            strokeCount++; // Track pen touches
+            document.getElementById('stroke-val').innerText = strokeCount;
+            
+            let pos = getPointerPos(e);
+            ctx.beginPath();
+            ctx.moveTo(pos.x, pos.y);
+        }
+
+        function draw(e) {
+            e.preventDefault();
+            if (!isDrawing) return;
+            let pos = getPointerPos(e);
+            ctx.lineTo(pos.x, pos.y);
+            ctx.strokeStyle = "#333";
+            ctx.lineWidth = 8;
+            ctx.lineCap = "round";
+            ctx.stroke();
+            
+            pixelsDrawn += 1; 
+            document.getElementById('ink-val').innerText = pixelsDrawn;
+
+            if (pos.x < minX) minX = pos.x;
+            if (pos.x > maxX) maxX = pos.x;
+            if (pos.y < minY) minY = pos.y;
+            if (pos.y > maxY) maxY = pos.y;
+            strokePoints.push({x: pos.x, y: pos.y});
+        }
+
+        function stopDrawing() { isDrawing = false; }
+
+        function clearCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            pixelsDrawn = 0;
+            strokeCount = 0;
+            minX = 10000; maxX = 0; minY = 10000; maxY = 0;
+            strokePoints = []; 
+            document.getElementById('ink-val').innerText = pixelsDrawn;
+            document.getElementById('stroke-val').innerText = "0";
+        }
+
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('touchstart', startDrawing, {passive: false});
+        canvas.addEventListener('touchmove', draw, {passive: false});
+        canvas.addEventListener('touchend', stopDrawing);
+
+		// ===================================================
+        // BIDIRECTIONAL AXIS REVERSAL TRACKING ENGINE
+        // ===================================================
+        function submitDrawing() {
+            if (pixelsDrawn < 20) {
+                alert("Please draw the stroke completely!");
+                return;
+            }
+
+            let width = Math.max(1, maxX - minX);
+            let height = Math.max(1, maxY - minY);
+            let aspectRatio = width / height; 
+            let fillDensity = pixelsDrawn / (width * height);
+            
+            // 1. ANTI-SCRIBBLE GUARD
+            if (fillDensity > 0.40) {
+                console.log(`FAIL: Scribble Detected (Density: ${fillDensity.toFixed(2)})`);
+                sendTelemetry(false);
+                return;
+            }
+
+            // 2. DIRECTIONAL REVERSAL TRACKING
+            let yReversals = 0, xReversals = 0;
+            let currentDirY = 0, currentDirX = 0;
+            
+            // Only track continuous curves if they drew it in ONE stroke
+            if (strokeCount === 1 && strokePoints.length > 5) {
+                let lastY = strokePoints[0].y;
+                let lastX = strokePoints[0].x;
+
+                for (let i = 1; i < strokePoints.length; i++) {
+                    let dy = strokePoints[i].y - lastY;
+                    // Y-Axis shift threshold (ignores micro-jitters)
+                    if (Math.abs(dy) > height * 0.15) { 
+                        let dirY = Math.sign(dy);
+                        if (currentDirY !== 0 && currentDirY !== dirY) yReversals++;
+                        currentDirY = dirY;
+                        lastY = strokePoints[i].y;
+                    }
+
+                    let dx = strokePoints[i].x - lastX;
+                    // X-Axis shift threshold
+                    if (Math.abs(dx) > width * 0.15) { 
+                        let dirX = Math.sign(dx);
+                        if (currentDirX !== 0 && currentDirX !== dirX) xReversals++;
+                        currentDirX = dirX;
+                        lastX = strokePoints[i].x;
+                    }
+                }
+            }
+
+            let isCorrect = false;
+
+            // 3. STRICT MATHEMATICAL VALIDATION
+            if (activeSubject === 'alphabet') {
+                let letter = currentAnswer.replace("Draw the letter: ", "").trim().toUpperCase();
+
+                // SOLVING M VS N FOR GOOD
+                if (letter === "M") {
+                    isCorrect = (strokeCount === 1 && yReversals === 3) || (strokeCount === 4);
+                } 
+                else if (letter === "N") {
+                    isCorrect = (strokeCount === 1 && yReversals === 2) || (strokeCount === 3);
+                } 
+                else if (letter === "W") {
+                    isCorrect = (strokeCount === 1 && yReversals === 3) || (strokeCount === 4);
+                }
+                else if (["O", "Q", "C"].includes(letter)) {
+                    isCorrect = (strokeCount === 1 && yReversals >= 1 && xReversals >= 1);
+                }
+                else if (["I", "L", "T"].includes(letter)) {
+                    isCorrect = (aspectRatio < 1.0); // Must be taller than it is wide
+                }
+                else {
+                    isCorrect = (pixelsDrawn > 30); // General fallback
+                }
+            } 
+            else if (activeSubject === 'shapes') {
+                if (currentAnswer.includes("Line")) {
+                    // Lines are extreme ratios and have ZERO reversals
+                    isCorrect = (aspectRatio > 2.5 || aspectRatio < 0.4) && (yReversals === 0 && xReversals === 0);
+                } 
+                else if (currentAnswer.includes("Circle")) {
+                    // Circles perfectly sweep the X and Y axis exactly twice
+                    isCorrect = (strokeCount === 1 && yReversals === 2 && xReversals === 2);
+                }
+                else if (currentAnswer.includes("Square") || currentAnswer.includes("Rectangle")) {
+                    // Squares are either 4 distinct lines, or 1 box drawn in a loop
+                    isCorrect = (strokeCount === 4) || (strokeCount === 1 && yReversals >= 2 && xReversals >= 2);
+                } 
+                else if (currentAnswer.includes("Triangle")) {
+                    isCorrect = (strokeCount === 3) || (strokeCount === 1 && yReversals >= 1);
+                }
+                else {
+                    isCorrect = (pixelsDrawn > 50); // Fallback for Complex shapes
+                }
+            } 
+
+            console.log(`Target: ${currentAnswer} | Strokes: ${strokeCount} | Y-Rev: ${yReversals} | X-Rev: ${xReversals} | Match: ${isCorrect}`);
+            sendTelemetry(isCorrect);
+        }
+
+        function submitAnswer(userAnswer) {
+            sendTelemetry(userAnswer === currentAnswer);
+        }
+
+        function endSession() {
+            document.getElementById('game-screen').style.display = 'none';
+            document.getElementById('summary-screen').style.display = 'block';
+        }
+
+        async function sendTelemetry(isCorrect) {
+            let totalTime = (Date.now() - questionStartTime) / 1000;
+            if (!hasTouched) hesitationTime = totalTime; 
+
+            const payload = {
+                student_id: parseInt(activeStudentId),
+                subject: activeSubject,
+                is_correct: isCorrect,
+                time_taken: totalTime,
+                hesitation: hesitationTime,
+                fidget_score: fidgetScore
+            };
+
+            document.getElementById('ai-insight').innerText = "Transmitting Telemetry...";
+
+            try {
+                const response = await fetch(`/api/analyze`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                document.getElementById('ai-insight').innerText = data.insight;
+                renderQuestion(data.next_question, data.new_level);
+            } catch (e) {
+                alert("Network disconnection detected.");
+            }
+        }
+
+        const numpad = document.getElementById('numpad');
+        for(let i=0; i<=20; i++) {
+            let btn = document.createElement('button');
+            btn.innerText = i;
+            btn.onpointerdown = () => submitAnswer(i);
+            numpad.appendChild(btn);
+        }
+    </script>
+</body>
+</html>
